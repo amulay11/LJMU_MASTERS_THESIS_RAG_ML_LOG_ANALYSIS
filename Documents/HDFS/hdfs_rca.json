@@ -1,0 +1,251 @@
+[
+  {
+    "rca_id": "HDFS-RCA-001",
+    "dataset": "HDFS",
+    "anomaly_type": "Widespread Block Read Exceptions - Distributed E3 Burst",
+    "root_cause_summary": "80 E3 (block read exception) events distributed across many DataNodes in the HDFS cluster within the observation window, with exceptions spanning over 20 distinct DataNode IP addresses, indicating widespread client read interruptions consistent with a benchmark workload's natural partial-read behavior combined with possible network instability.",
+    "root_cause_description": "80 E3 events were observed in the 2000-line sample, all at WARN level from dfs.DataNode$DataXceiver. Each E3 event records 'Got exception while serving blk_<*> to /<client IP>:'. The E3 pattern is documented as HADOOP-3678 behavior — it is a normal HDFS event when a client disconnects mid-read (e.g., read is complete or client closes the connection early). However, the density of E3 events in this sample (80 WARN events out of 2000 lines = 4% of all events) is noteworthy. E3 events are distributed across DataNodes including 10.251.30.85, 10.251.126.255, 10.251.123.132, 10.250.13.188, 10.251.199.19, 10.250.9.207, 10.251.202.134, 10.250.14.196, 10.251.107.227, and many others. The distribution across many DataNodes (not concentrated on a single node) is consistent with normal MapReduce workload behavior where tasks read partial blocks. If E3 events were concentrated on a single DataNode, it would indicate hardware degradation on that node. The distributed pattern here indicates client-side or workload-driven behavior rather than server-side failure.",
+    "confidence_level": "High",
+    "confidence_reasoning": "E3 is explicitly documented in the HDFS architecture documentation and HDFS Severity Taxonomy as a correctable/transparent fault (Error Type 1) that is 'normal HDFS behavior when client stops mid-read.' The distribution across 20+ distinct DataNodes rules out single-node hardware failure. The pattern is consistent with the MapReduce benchmark workload described in the HDFS system architecture documentation.",
+    "causal_chain": [
+      {
+        "event": "MapReduce tasks initiate block reads across cluster",
+        "timestamp": "081109 214043 (first E3 observed)",
+        "affected_component": "Multiple DataNodes (10.251.30.85, 10.251.126.255, etc.)",
+        "description": "MapReduce benchmark workload starts reading blocks from multiple DataNodes simultaneously. Each task requests a block and may close the connection once sufficient data is read."
+      },
+      {
+        "event": "Clients disconnect mid-read triggering E3 exceptions",
+        "timestamp": "081109 214043 to 224741 (first 20 E3 events)",
+        "affected_component": "dfs.DataNode$DataXceiver on multiple DataNodes",
+        "description": "When a MapReduce task finishes reading (or the TCP connection closes), the DataXceiver thread logs the connection close as an exception. These are warnings, not errors. Data was served successfully in the majority of cases."
+      },
+      {
+        "event": "Continued E3 events throughout observation window",
+        "timestamp": "Throughout 081109 observation window",
+        "affected_component": "Cluster-wide DataNode fleet",
+        "description": "80 E3 events accumulate representing 80 connection close events during block serving operations. The workload-wide pattern is consistent with normal MapReduce behavior."
+      }
+    ],
+    "supporting_evidence": {
+      "relevant_logs": [
+        "LineId=78, E3, 081109 214043, WARN, dfs.DataNode$DataXceiver, 10.251.30.85:50010:Got exception while serving blk_-2918118818249673980 to /10.251.90.64:",
+        "LineId=79, E3, 081109 214402, WARN, dfs.DataNode$DataXceiver, 10.251.126.255:50010:Got exception while serving blk_8376667364205250596 to /10.251.91.159:",
+        "LineId=82, E3, 081109 214910, WARN, dfs.DataNode$DataXceiver, 10.250.13.188:50010:Got exception while serving blk_6241141267506413726 to /10.251.194.245:"
+      ],
+      "log_templates": [
+        "E3: <*>:<*>:Got exception while serving blk_<*> to /<*>:"
+      ],
+      "historical_similarity": "E3 pattern is classified as Error Type 1 (Correctable/Transparent Fault) in the HDFS Severity Taxonomy. System Impact score 1 (Single Block Self-Healing). Documented as HADOOP-3678 expected behavior. Distribution across 20+ DataNodes confirms workload-level pattern, not hardware failure.",
+      "system_context": "In HDFS, when a client reads a block from a DataNode, the DataXceiver thread serves the data over TCP. When the client closes the connection (normal end of read), the DataXceiver may throw a connection-close exception that is logged as WARN/E3. This is documented and expected behavior in Hadoop 0.20.x. 80 events in a 2000-line sample from a MapReduce benchmark workload is within expected range.",
+      "system_state_indicators": [
+        "80 E3 events across 20+ distinct DataNode IP addresses",
+        "All 80 E3 events at WARN level (not ERROR or FATAL)",
+        "E3 events distributed across time window rather than burst concentrated",
+        "No corresponding E5 (under-replication) or E8 (block invalidation) events correlated with E3 blocks",
+        "E14 (verification succeeded) events in sample confirm block integrity maintained",
+        "E3 events interspersed with normal E1, E6, E10, E11 events — no operational silence"
+      ]
+    }
+  },
+  {
+    "rca_id": "HDFS-RCA-002",
+    "dataset": "HDFS",
+    "anomaly_type": "Write Pipeline Termination Without Receipt Confirmation",
+    "root_cause_summary": "19 E10 (PacketResponder terminating) events occurred without a corresponding E11 (block received confirmation) in the 2000-line sample, indicating write pipeline failures where block writes completed the pipeline teardown phase without the tail DataNode confirming successful block receipt.",
+    "root_cause_description": "The 2000-line HDFS sample contains 311 E10 events and 292 E11 events, leaving 19 E10 events (approximately 6%) without a matching E11 receipt confirmation. E10 ('PacketResponder <N> for block blk_<*> terminating') records the teardown of the write pipeline on a DataNode, while E11 ('Received block blk_<*> of size <*> from /<*>') records the downstream confirmation of successful block receipt. When E10 occurs without E11, it indicates the PacketResponder thread terminated before receiving confirmation from the downstream DataNode in the replication pipeline. This is classified as a write pipeline failure for the affected blocks. The NameNode will detect these under-replicated blocks and schedule re-replication (E5 events). The 6% failure rate (19 of 311 pipeline operations) is above the background level and may indicate transient network packet loss or write pressure on specific DataNodes.",
+    "confidence_level": "Medium",
+    "confidence_reasoning": "The 19 E10-without-E11 pattern is a recognized HDFS failure indicator per the HDFS Severity Taxonomy (Error Type 2, Transient Block/Pipeline Fault). However, without block-level grouping of all events by block ID, it is not possible to confirm whether all 19 missing E11 events represent genuine pipeline failures or log ordering artifacts. Medium confidence due to the sample-based analysis limitation.",
+    "causal_chain": [
+      {
+        "event": "Write pipeline established for block replication",
+        "timestamp": "081109 (various timestamps)",
+        "affected_component": "DataNode write pipeline (client → DataNode 1 → DataNode 2 → DataNode 3)",
+        "description": "HDFS write pipeline of 3 DataNodes established for block write. Data flows from client to first DataNode, then forwarded to second and third."
+      },
+      {
+        "event": "PacketResponder terminates without downstream ACK",
+        "timestamp": "Multiple E10 events throughout the window",
+        "affected_component": "PacketResponder threads on DataNodes with incomplete pipelines",
+        "description": "19 instances where the PacketResponder thread on a DataNode terminates (E10) without receiving the expected E11 receipt confirmation from the downstream DataNode. The block is written locally but not confirmed by all replicas."
+      },
+      {
+        "event": "Block enters under-replication state",
+        "timestamp": "Inferred after E10 without E11",
+        "affected_component": "NameNode replication queue, affected blocks",
+        "description": "NameNode detects that the affected blocks have insufficient confirmed replicas. Re-replication is scheduled (E5 event observed at LineId=1765 for one block)."
+      },
+      {
+        "event": "E5 re-replication command observed",
+        "timestamp": "081111 080934",
+        "affected_component": "NameNode FSNamesystem, DataNode 10.250.14.38",
+        "description": "NameNode instructs DataNode 10.250.14.38 to replicate blk_-7571492020523929240 to DataNode 10.251.122.38 — confirming the under-replication recovery path is functioning."
+      }
+    ],
+    "supporting_evidence": {
+      "relevant_logs": [
+        "LineId=1, E10, 081109 203615, INFO, dfs.DataNode$PacketResponder, PacketResponder 1 for block blk_38865049064139660 terminating",
+        "LineId=10, E11, 081109 204655, INFO, dfs.DataNode$PacketResponder, Received block blk_3587508140051953248 of size 67108864 from /10.251.42.84",
+        "LineId=1765, E5, 081111 080934, INFO, dfs.FSNamesystem, BLOCK* ask 10.250.14.38:50010 to replicate blk_-7571492020523929240 to datanode(s) 10.251.122.38:50010"
+      ],
+      "log_templates": [
+        "E10: PacketResponder <*> for block blk_<*> terminating",
+        "E11: Received block blk_<*> of size <*> from /<*>",
+        "E5: BLOCK* ask <*>:<*> to replicate blk_<*> to datanode(s) <*>:<*>"
+      ],
+      "historical_similarity": "E10 without E11 is classified as Transient Block/Pipeline Fault (Error Type 2) in the HDFS Severity Taxonomy. System Impact score 2 (Single Block/Single DataNode Recoverable). The E5 re-replication event confirms automatic recovery path is active.",
+      "system_context": "The HDFS write pipeline consists of N DataNodes in a chain. Each DataNode's PacketResponder thread (E10) manages acknowledgements flowing back from tail to head. When a pipeline stage fails to forward the ACK, E11 may not be generated for that block. HDFS automatically detects this state and schedules re-replication (E5) to restore the desired replication factor. The 292 E11 vs. 311 E10 count shows 94% pipeline success rate — 19 incomplete write pipelines in a benchmark workload.",
+      "system_state_indicators": [
+        "311 E10 events vs 292 E11 events — 19-event discrepancy (6.1%)",
+        "One E5 re-replication event observed confirming under-replication recovery",
+        "E10 and E11 events distributed across many DataNode IP addresses",
+        "No concentration of failures on a single DataNode (would indicate hardware degradation)",
+        "E6 (blockMap updated) events at 314 occurrences indicate most writes completed successfully"
+      ]
+    }
+  },
+  {
+    "rca_id": "HDFS-RCA-003",
+    "dataset": "HDFS",
+    "anomaly_type": "Bulk Block Deletion Event - DataNode Decommission or Over-Replication Cleanup",
+    "root_cause_summary": "Two E4 (bulk delete command) events at timestamps 065254 and 065303 issued mass block deletion instructions to DataNodes 10.250.17.177 (97 blocks) and 10.250.10.213 (100 blocks), indicating either planned DataNode decommissioning or a large-scale over-replication cleanup by the NameNode.",
+    "root_cause_description": "Two E4 events at nearly identical timestamps (065254 and 065303 — 49 seconds apart) issued mass block deletion commands from the NameNode to two DataNodes: 10.250.17.177 (97 block IDs) and 10.250.10.213 (100 block IDs). This is in contrast to the other three E4 events (LineIds 928 and 1029) which delete only 1-2 blocks each (single over-replication corrections). The mass deletion of 97 and 100 blocks within 49 seconds on two different DataNodes is characteristic of: (1) DataNode decommissioning — when a DataNode is removed from the cluster, the NameNode instructs it to delete all its blocks (after re-replication to other nodes is complete), or (2) a mass over-replication correction triggered by a cluster rebalancing operation, or (3) a bulk file deletion by the application that triggers cleanup of all block replicas. The concurrent timing on two DataNodes suggests a coordinated operation (decommission or rebalance) rather than independent events.",
+    "confidence_level": "Medium",
+    "confidence_reasoning": "The mass deletion pattern (97-100 blocks in a single E4 command) is strongly indicative of a decommissioning or planned operation. However, without NameNode audit logs or application context, it is not possible to confirm whether this was intentional decommissioning or an unplanned mass deletion trigger. The coordinated 49-second gap on two different DataNodes is strong circumstantial evidence of a planned operation.",
+    "causal_chain": [
+      {
+        "event": "NameNode initiates mass block deletion on DataNode 10.250.17.177",
+        "timestamp": "081109 065254",
+        "affected_component": "NameNode FSNamesystem, DataNode 10.250.17.177:50010",
+        "description": "NameNode issues E4 command to delete 97 blocks on DataNode 10.250.17.177. This is consistent with the NameNode having already confirmed re-replication of these blocks to other DataNodes and now cleaning up the source node."
+      },
+      {
+        "event": "NameNode initiates mass block deletion on DataNode 10.250.10.213",
+        "timestamp": "081109 065303",
+        "affected_component": "NameNode FSNamesystem, DataNode 10.250.10.213:50010",
+        "description": "49 seconds later, 100 blocks deleted from DataNode 10.250.10.213. Concurrent decommissioning of two DataNodes, or a rebalance operation clearing over-replicated blocks from these two nodes."
+      },
+      {
+        "event": "DataNodes execute block deletions",
+        "timestamp": "081109 065254 - 065303 and following",
+        "affected_component": "Local disk on DataNodes 10.250.17.177 and 10.250.10.213",
+        "description": "DataNodes execute the deletion commands, removing block files from local storage. Corresponding E9 events (physical deletion) would follow."
+      }
+    ],
+    "supporting_evidence": {
+      "relevant_logs": [
+        "LineId=1579, E4, 081109 065254, INFO, dfs.FSNamesystem, BLOCK* ask 10.250.17.177:50010 to delete blk_-5140072410813878235 [97 block IDs total]",
+        "LineId=1581, E4, 081109 065303, INFO, dfs.FSNamesystem, BLOCK* ask 10.250.10.213:50010 to delete blk_4029139044660806713 [100 block IDs total]",
+        "LineId=928, E4, 081109 212510, INFO, dfs.FSNamesystem, BLOCK* ask 10.250.18.114:50010 to delete blk_-5140072410813878235",
+        "LineId=1029, E4, 081109 221932, INFO, dfs.FSNamesystem, BLOCK* ask 10.251.122.79:50010 to delete blk_8048594464172649365"
+      ],
+      "log_templates": [
+        "E4: BLOCK* ask <*>:<*> to delete blk_<*>"
+      ],
+      "historical_similarity": "Mass E8+E9 (block invalidation and deletion) on a single DataNode is documented in the HDFS Severity Taxonomy as DataNode/Sustained Fault pattern. The E4 mass deletion here (97-100 blocks per DataNode) is consistent with DataNode decommission procedure. Single-block E4 events (lines 928, 1029) represent normal over-replication correction.",
+      "system_context": "In HDFS, the NameNode tracks block replica locations. When a DataNode is decommissioned, the NameNode first waits for all blocks on that node to be replicated elsewhere, then sends block invalidation commands. Alternatively, when block replication exceeds the desired factor (over-replication), the NameNode identifies the excess replica and sends a delete command. Single-block E4 events are over-replication corrections; multi-block E4 events in bulk suggest decommission or bulk file deletion.",
+      "system_state_indicators": [
+        "Two E4 events 49 seconds apart deleting 97 and 100 blocks respectively",
+        "Mass deletion targets only two specific DataNodes (10.250.17.177 and 10.250.10.213)",
+        "Compared to single-block E4 events (lines 928, 1029) — 97-100 blocks is 97-100x larger",
+        "No E3 exceptions on these DataNodes before the deletion suggests nodes were healthy",
+        "E4 events at early timestamp (065254) vs. other events at 20xxxx timestamps suggests different time window or out-of-order sample",
+        "263 E9 (physical deletion) events in sample consistent with large-scale block cleanup activity"
+      ]
+    }
+  },
+  {
+    "rca_id": "HDFS-RCA-004",
+    "dataset": "HDFS",
+    "anomaly_type": "Block Under-Replication Recovery",
+    "root_cause_summary": "The NameNode identified a block (blk_-7571492020523929240) as under-replicated and issued a replication command to DataNode 10.250.14.38 to replicate it to DataNode 10.251.122.38, confirming automatic HDFS replication recovery is functioning after a previous write pipeline failure.",
+    "root_cause_description": "A single E5 event was observed in the 2000-line sample at timestamp 081111 080934: 'BLOCK* ask 10.250.14.38:50010 to replicate blk_-7571492020523929240 to datanode(s) 10.251.122.38:50010'. This event indicates the NameNode detected that block blk_-7571492020523929240 has fewer replicas than its configured replication factor (typically 3) and is scheduling a replication copy. E5 events are the HDFS automatic recovery mechanism for under-replication — the NameNode orchestrates recovery by selecting a DataNode that has the block (source: 10.250.14.38) and a target DataNode with available space (10.251.122.38). The presence of only one E5 event in 2000 log lines from a 38.7-hour observation span suggests the cluster is healthy and under-replication events are rare or this sample does not capture a major DataNode failure window. In a DataNode failure scenario, hundreds of E5 events would be expected.",
+    "confidence_level": "High",
+    "confidence_reasoning": "E5 is an unambiguous NameNode replication command with specific source and target DataNode addresses. The single occurrence in the sample is consistent with normal HDFS operation recovering from the write pipeline failures evidenced by the E10/E11 discrepancy. High confidence in the mechanism; the root trigger (which write pipeline failure caused this specific block to be under-replicated) cannot be determined without block-level correlation.",
+    "causal_chain": [
+      {
+        "event": "Block blk_-7571492020523929240 enters under-replication state",
+        "timestamp": "Before 081111 080934 (inferred from E10-without-E11 pattern)",
+        "affected_component": "NameNode block replication tracking; affected block",
+        "description": "A previous write pipeline failure (E10 without E11) left this block with fewer than the desired number of replicas. The NameNode detects this via its block health checks."
+      },
+      {
+        "event": "NameNode schedules re-replication",
+        "timestamp": "081111 080934",
+        "affected_component": "NameNode FSNamesystem, DataNode 10.250.14.38",
+        "description": "NameNode issues BLOCK* ask command to DataNode 10.250.14.38 to copy the block to DataNode 10.251.122.38. The block remains accessible via existing replicas during this process."
+      },
+      {
+        "event": "Replication transfer in progress",
+        "timestamp": "After 081111 080934",
+        "affected_component": "DataNodes 10.250.14.38 and 10.251.122.38",
+        "description": "Source DataNode (10.250.14.38) initiates block transfer to target (10.251.122.38). An E2 (Starting thread to transfer block) would be generated, followed by E6 (blockMap updated) when the transfer completes."
+      }
+    ],
+    "supporting_evidence": {
+      "relevant_logs": [
+        "LineId=1765, E5, 081111 080934, INFO, dfs.FSNamesystem, BLOCK* ask 10.250.14.38:50010 to replicate blk_-7571492020523929240 to datanode(s) 10.251.122.38:50010"
+      ],
+      "log_templates": [
+        "E5: BLOCK* ask <*>:<*> to replicate blk_<*> to datanode(s) <*>:<*>"
+      ],
+      "historical_similarity": "E5 is classified as Transient Block/Pipeline Fault (Error Type 2) in the HDFS Severity Taxonomy. Single E5 event represents normal automated recovery. Mass E5 events (storm) would indicate DataNode failure. This single occurrence is the successful recovery response to one of the 19 E10-without-E11 incomplete write pipelines.",
+      "system_context": "HDFS maintains block replicas according to the configured replication factor (typically 3). The NameNode continuously monitors block health and schedules re-replication for under-replicated blocks. The E5 event at timestamp 081111 (November 11) vs. most other events at 081109 (November 9) suggests this block remained under-replicated for approximately 2 days before re-replication was triggered, or the 2000-line sample captures a broader time window.",
+      "system_state_indicators": [
+        "Single E5 event in entire 2000-line sample",
+        "E5 at timestamp 081111 (day 3) vs. most events at 081109 (day 1) — delayed re-replication",
+        "Specific source (10.250.14.38) and target (10.251.122.38) DataNodes identified",
+        "Block size 67108864 (64MB — standard HDFS block size for this cluster)",
+        "No E5 storm (hundreds of events) — confirms no major DataNode failure in sample window"
+      ]
+    }
+  },
+  {
+    "rca_id": "HDFS-RCA-005",
+    "dataset": "HDFS",
+    "anomaly_type": "Mass Block Invalidation on Multiple DataNodes - Over-Replication Cleanup",
+    "root_cause_summary": "224 E8 (block scheduled for invalidation) and 263 E9 (block physically deleted) events indicate a large-scale cleanup of over-replicated or deleted file blocks across the cluster, with individual DataNodes receiving multiple invalidation instructions.",
+    "root_cause_description": "The HDFS 2000-line sample contains 224 E8 events (NameNode schedules block invalidation) and 263 E9 events (DataNode executes physical deletion). E8 events are distributed across many DataNodes, with the most frequently appearing nodes in the invalidation set including 10.250.5.161, 10.250.13.240, 10.251.106.37, 10.251.89.155 (each appearing 4 times) and many others. The E9 events show block file paths of the form /mnt/hadoop/dfs/data/current/subdirN/blk_<*>, indicating actual filesystem deletions. The overall E8/E9 activity (224+263 = 487 deletion-related events out of 2000 lines = 24%) is high, suggesting the cluster underwent significant block cleanup during the observation window. This is consistent with: (1) completion of a large MapReduce job triggering output directory cleanup, (2) over-replication correction after a DataNode returned to the cluster, or (3) scheduled block rebalancing. The distribution across many DataNodes (no single node receiving disproportionate deletes in the E8 analysis) suggests cluster-wide over-replication correction rather than single-node decommission.",
+    "confidence_level": "Medium",
+    "confidence_reasoning": "E8 and E9 events are individually well-understood (NameNode invalidation instruction and DataNode execution respectively). The high volume (24% of sample) is notable but expected during certain cluster lifecycle operations. The distribution across many DataNodes (4 blocks max per node in E8 analysis) argues against single-node decommission. Medium confidence because the specific trigger (job completion, rebalancer, or DataNode return) cannot be determined from the available log data.",
+    "causal_chain": [
+      {
+        "event": "NameNode determines blocks are invalidated (over-replicated or file deleted)",
+        "timestamp": "081109 20724 onwards",
+        "affected_component": "NameNode FSNamesystem, block invalidation set",
+        "description": "NameNode adds blocks to the invalidation set for multiple DataNodes. The first E8 event at 20724 targets DataNode 10.251.31.160:50010."
+      },
+      {
+        "event": "Mass E8 events distributed across DataNodes",
+        "timestamp": "081109 103026 - 103027 (major burst) and throughout",
+        "affected_component": "Multiple DataNodes across 203-node cluster",
+        "description": "Burst of E8 events at timestamp 103026-103027 targeting DataNodes 10.251.75.49, 10.251.195.70, 10.251.30.85, 10.250.5.161 simultaneously — consistent with a single file deletion triggering cleanup of replicas across the cluster."
+      },
+      {
+        "event": "DataNodes execute physical block deletions",
+        "timestamp": "081109 103201 onwards",
+        "affected_component": "DataNode local disk filesystems at /mnt/hadoop/dfs/data/",
+        "description": "DataNodes receive the invalidation instructions and delete block files from their local ext3/ext4 filesystems. E9 events confirm physical file removal."
+      }
+    ],
+    "supporting_evidence": {
+      "relevant_logs": [
+        "LineId=292, E8, 081109 20724, INFO, dfs.FSNamesystem, BLOCK* NameSystem.delete: blk_2568309208894455676 is added to invalidSet of 10.251.31.160:50010",
+        "LineId=362, E8, 081109 103026, INFO, dfs.FSNamesystem, BLOCK* NameSystem.delete: blk_-1233005817943453613 is added to invalidSet of 10.251.75.49:50010",
+        "LineId=73, E9, 081109 213837, INFO, dfs.FSDataset, Deleting block blk_1781953582842324563 file /mnt/hadoop/dfs/data/current/subdir5/blk_1781953582842324563"
+      ],
+      "log_templates": [
+        "E8: BLOCK* NameSystem.delete: blk_<*> is added to invalidSet of <*>:<*>",
+        "E9: Deleting block blk_<*> file /<*>/blk_<*>"
+      ],
+      "historical_similarity": "E8 and E9 in combination are the standard over-replication/file-deletion cleanup path in HDFS. The HDFS Severity Taxonomy notes mass E8+E9 on a single DataNode as DataNode loss indicator; here the distribution across many nodes is consistent with planned cleanup rather than failure.",
+      "system_context": "HDFS performs block cleanup in two stages: (1) the NameNode adds the block to a DataNode's invalidation set (E8), and (2) the DataNode physically deletes the file during the next block report cycle (E9). The 263 E9 events slightly exceeding 224 E8 events in the sample suggests E8 events from the prior time period are executing their E9 deletions, meaning the cleanup began before the sample window.",
+      "system_state_indicators": [
+        "224 E8 and 263 E9 events — 24% of sample is deletion-related",
+        "E8 events distributed across many DataNodes (max 4 per node in top-frequency analysis)",
+        "E9 events reference specific subdirectory paths (/mnt/hadoop/dfs/data/current/subdirN)",
+        "Burst of E8 events at 103026-103027 on 4 DataNodes simultaneously — file deletion trigger",
+        "No corresponding large E5 storm that would indicate DataNode failure recovery"
+      ]
+    }
+  }

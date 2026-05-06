@@ -1,0 +1,254 @@
+[
+  {
+    "rca_id": "BGL-RCA-001",
+    "dataset": "BGL",
+    "anomaly_type": "Sustained Hardware Fault - Data TLB Degradation",
+    "root_cause_summary": "Physical degradation of the MMU/TLB hardware on compute node R30-M0-N9-C:J16-U01 causing 60 repeated data TLB error interrupts over approximately 5.5 hours, indicating a failing ASIC chip requiring physical replacement.",
+    "root_cause_description": "Node R30-M0-N9-C:J16-U01 (Rack 30, Midplane 0, Node 9, Compute Card J16, ASIC U01) generated 60 FATAL KERNDTLB events over a 5.5-hour window from 2005-06-11 17:32 to 23:26. The Data Translation Lookaside Buffer (TLB) is part of the PowerPC 440 MMU subsystem on the BGL ASIC. Repeated TLB error interrupts on a single ASIC, all from the same physical location, indicate progressive hardware degradation rather than a transient fault. In BGL's lightweight compute kernel, a data TLB error interrupt terminates the current compute process on that node. Since BGL uses tightly-coupled MPI execution, the loss of this single node would abort or stall all compute tasks in its job partition. The escalating frequency of events across the 5.5-hour window (with clusters of multiple events occurring within minutes of each other toward the end of the window) is consistent with a failing DRAM or MMU component that cannot be resolved via MMCS reboot. Physical chip replacement is the only remediation.",
+    "confidence_level": "High",
+    "confidence_reasoning": "60 identical FATAL KERNDTLB events are concentrated exclusively on one node (R30-M0-N9-C:J16-U01), providing unambiguous spatial evidence of hardware localization. The sustained multi-hour occurrence eliminates transient causes. This matches the documented BGL failure pattern for sustained hardware fault (Error Type score 3, System Impact score 2) in the BGL/RAS Severity Taxonomy. The ASIC location encoding confirms single-chip scope.",
+    "causal_chain": [
+      {
+        "event": "First KERNDTLB event detected",
+        "timestamp": "2005-06-11-17.32.07.581048",
+        "affected_component": "MMU/TLB hardware on R30-M0-N9-C:J16-U01",
+        "description": "Initial data TLB error interrupt on node R30-M0-N9-C:J16-U01. Single occurrence at this point, could be transient."
+      },
+      {
+        "event": "Repeated KERNDTLB events accumulating",
+        "timestamp": "2005-06-11-17.42 to 20.54",
+        "affected_component": "MMU/TLB hardware on R30-M0-N9-C:J16-U01",
+        "description": "Events continue to fire at irregular intervals (minutes apart), ruling out transient cosmic ray or single-bit flip. Same ASIC location (J16-U01) implicated in every event. Hardware is degrading progressively."
+      },
+      {
+        "event": "Event burst acceleration",
+        "timestamp": "2005-06-11-21.17 to 21.33",
+        "affected_component": "MMU/TLB hardware on R30-M0-N9-C:J16-U01",
+        "description": "Multiple KERNDTLB events fire within minutes of each other, indicating accelerating hardware failure. Events at 21:17, 21:19, 21:28, 21:29, 21:32, 21:33."
+      },
+      {
+        "event": "Final KERNDTLB events recorded in sample",
+        "timestamp": "2005-06-11-23.21 to 23.26",
+        "affected_component": "MMU/TLB hardware on R30-M0-N9-C:J16-U01",
+        "description": "60th event recorded. Node has been generating fatal TLB errors for over 5.5 hours continuously. ASIC chip U01 on card J16 is confirmed degraded and requires physical replacement."
+      }
+    ],
+    "supporting_evidence": {
+      "relevant_logs": [
+        "LineId=104, KERNDTLB, 2005-06-11-17.32.07.581048, R30-M0-N9-C:J16-U01, KERNEL, FATAL, data TLB error interrupt",
+        "LineId=134, KERNDTLB, 2005-06-11-20.07.03.218292, R30-M0-N9-C:J16-U01, KERNEL, FATAL, data TLB error interrupt",
+        "LineId=163, KERNDTLB, 2005-06-11-23.26.23.330548, R30-M0-N9-C:J16-U01, KERNEL, FATAL, data TLB error interrupt"
+      ],
+      "log_templates": [
+        "E55: data TLB error interrupt"
+      ],
+      "historical_similarity": "Matches documented BGL sustained hardware fault pattern (KERNDTLB - 60 events on 1 node) in the BGL/RAS Severity Taxonomy. Error Type score 3 (Sustained/Repeated hardware fault), System Impact score 2 (Single node - hardware degraded), Cascade Potential score 2 (Job-level - one partition affected).",
+      "system_context": "BGL compute node ASIC contains PowerPC 440 core with MMU/TLB unit. A data TLB error occurs when a memory address translation fails in the TLB hardware. On BGL's lightweight kernel, this causes immediate process termination on the affected node. 60 occurrences on a single ASIC over 5.5 hours is a definitive indicator of physical chip degradation requiring replacement per BGL RAS operational procedures.",
+      "system_state_indicators": [
+        "All 60 KERNDTLB events confined to single node R30-M0-N9-C:J16-U01",
+        "Event rate accelerating over time (from 10-minute gaps early on to sub-minute gaps in final hour)",
+        "No other nodes in Rack 30 showing similar patterns in the sample window",
+        "FATAL severity level on all 60 events",
+        "EventId E55 (data TLB error interrupt) exclusively from this ASIC"
+      ]
+    }
+  },
+  {
+    "rca_id": "BGL-RCA-002",
+    "dataset": "BGL",
+    "anomaly_type": "Multi-Partition CioStream Network Failure - APPREAD",
+    "root_cause_summary": "Loss of the CioStream control connection between I/O nodes and the central ciod service (172.16.96.116) killing running job partitions due to TCP stream failure on the compute I/O network.",
+    "root_cause_description": "Three APPREAD events were observed across two separate I/O nodes (R04-M1-N4-I and R27-M1-N4-I) at near-simultaneous timestamps (2005-06-04 00:24:32 and 00:24:36, approximately 4 seconds apart), all targeting the same service IP (172.16.96.116). The ciod (Compute I/O Daemon) on these I/O nodes failed to read the message prefix on the CioStream control socket. The CioStream protocol is the control plane communication between I/O nodes and the central application launch/management service. A failure to read the message prefix is catastrophic for any in-flight job on those I/O partitions, as it severs the control channel that coordinates compute node execution. The shared target IP (172.16.96.116) suggests a common service-side failure or network disruption rather than independent I/O node hardware faults. A later isolated APPREAD at 2005-06-16 14:55 on R32-M1-N8-I further suggests recurring instability in this control path.",
+    "confidence_level": "High",
+    "confidence_reasoning": "Two simultaneous APPREAD events on different I/O nodes (4 seconds apart) targeting the exact same control service IP is strong evidence of a shared service or network event rather than independent node failures. APPREAD is documented in the BGL/RAS taxonomy as a software/application communication failure pattern. The FATAL severity and APP component confirm job-killing impact.",
+    "causal_chain": [
+      {
+        "event": "Simultaneous CioStream control stream failures on two I/O nodes",
+        "timestamp": "2005-06-04-00.24.32 / 00.24.36",
+        "affected_component": "I/O nodes R04-M1-N4-I:J18-U11 and R27-M1-N4-I:J18-U01; ciod service at 172.16.96.116",
+        "description": "Both I/O nodes report 'ciod: failed to read message prefix on control stream (CioStream socket to 172.16.96.116)'. The 4-second gap between events is consistent with near-simultaneous discovery of a common upstream failure."
+      },
+      {
+        "event": "Job partition termination",
+        "timestamp": "2005-06-04-00.24.32",
+        "affected_component": "Compute node partitions served by affected I/O nodes",
+        "description": "Loss of the CioStream control connection kills the running job on the affected partitions. Each I/O node services up to 64 compute nodes (1:64 I/O ratio in BGL), meaning potentially 128 compute nodes lost their jobs."
+      },
+      {
+        "event": "Recurrence of APPREAD event",
+        "timestamp": "2005-06-16-14.55.02",
+        "affected_component": "I/O node R32-M1-N8-I:J18-U01",
+        "description": "A third APPREAD event on a different I/O node connecting to the same control service IP (172.16.96.116:51706), suggesting the control service or its network path has recurring instability."
+      }
+    ],
+    "supporting_evidence": {
+      "relevant_logs": [
+        "LineId=9, APPREAD, 2005-06-04-00.24.32.432192, R04-M1-N4-I:J18-U11, APP, FATAL, ciod: failed to read message prefix on control stream (CioStream socket to 172.16.96.116:33569)",
+        "LineId=10, APPREAD, 2005-06-04-00.24.36.222560, R27-M1-N4-I:J18-U01, APP, FATAL, ciod: failed to read message prefix on control stream (CioStream socket to 172.16.96.116:33370)",
+        "LineId=346, APPREAD, 2005-06-16-14.55.02.074340, R32-M1-N8-I:J18-U01, APP, FATAL, ciod: failed to read message prefix on control stream (CioStream socket to 172.16.96.116:51706)"
+      ],
+      "log_templates": [
+        "E33: ciod: failed to read message prefix on control stream (CioStream socket to <*>:<*>)"
+      ],
+      "historical_similarity": "APPREAD is documented in BGL/RAS taxonomy as Software/Application Communication Failure (Error Type 2). Multiple I/O nodes affected within seconds targeting same control IP suggests shared service disruption.",
+      "system_context": "BGL I/O nodes run Linux and host the ciod daemon, which manages the CioStream control connection to the central application management service. Each I/O node serves up to 64 compute nodes at a 1:64 ratio. The CioStream control stream is the critical channel for job coordination; its loss immediately terminates the affected job partition. The shared service IP (172.16.96.116) is the central ciod service endpoint shared across all I/O nodes.",
+      "system_state_indicators": [
+        "Two APPREAD events within 4 seconds on different I/O nodes at same control IP",
+        "FATAL severity on all APPREAD events",
+        "Recurrence 12 days later on a third I/O node at same control IP",
+        "All events targeting port 33xxx/51xxx on 172.16.96.116 (shared control service)",
+        "I/O node designator '-I:' in node address confirms these are I/O nodes, not compute nodes"
+      ]
+    }
+  },
+  {
+    "rca_id": "BGL-RCA-003",
+    "dataset": "BGL",
+    "anomaly_type": "Widespread Data Storage Interrupt Burst - KERNSTOR",
+    "root_cause_summary": "A burst of 22 KERNSTOR (data storage interrupt / DSI) events spread across 22 distinct nodes in multiple racks within an approximately 20-minute window on 2005-06-13 and a second burst of 8 events on 2005-06-14, indicating a cluster-wide transient condition rather than individual node failures.",
+    "root_cause_description": "30 KERNSTOR events were observed across 30 distinct compute nodes, with two primary burst windows: 8 events on 2005-06-13 (17:36–17:44) spread across racks R01, R02, R05, R06, R10, R13, R15, R16, and 22 events on 2005-06-14 (09:06–10:17) spread across racks R01, R03, R04, R05, R06, R07, R11, R12, R14, R15, R16, R20, R21, R24, R25. A KERNSTOR (data storage interrupt) is a PowerPC DSI exception triggered when a data memory access fails — the PowerPC equivalent of a segmentation fault. Each event terminates the process on that node. The spatial distribution across many racks with each event on a different node (no repeated nodes) is consistent with a software-triggered condition or a coordinated job executing code with a memory access bug, rather than a hardware failure. The 22-node burst within 69 minutes on 2005-06-14 strongly suggests a single large MPI job across multiple partitions simultaneously encountering a memory access fault in application code.",
+    "confidence_level": "Medium",
+    "confidence_reasoning": "The spread across 30 distinct nodes across many racks argues against hardware failure (which would cluster spatially). The temporal burst pattern (22 events in 69 minutes across diverse racks) strongly suggests application-level causation. However, without the application context or MPI job IDs visible in the logs, it is not possible to definitively confirm whether this was one job or multiple concurrent jobs simultaneously encountering the same bug.",
+    "causal_chain": [
+      {
+        "event": "First burst of KERNSTOR events across multiple racks",
+        "timestamp": "2005-06-13-17.36 to 17.44",
+        "affected_component": "Compute nodes across racks R01, R02, R05, R06, R10, R13, R15, R16",
+        "description": "8 KERNSTOR events on 8 distinct nodes across 8 different racks within 8 minutes. Spatial diversity rules out rack-level hardware failure. Temporal clustering suggests a distributed application hitting a common code path with a memory fault."
+      },
+      {
+        "event": "Major burst of KERNSTOR events",
+        "timestamp": "2005-06-14-09.06 to 10.17",
+        "affected_component": "Compute nodes across 14 different racks",
+        "description": "22 KERNSTOR events on 22 distinct nodes across racks R01–R25 within 69 minutes. The 2-hour separation from the first burst suggests either a new job launch or retry of the same job. Application code memory access violation across all participating compute nodes."
+      },
+      {
+        "event": "Process termination on each affected node",
+        "timestamp": "Multiple timestamps",
+        "affected_component": "Individual compute node processes",
+        "description": "Each DSI causes immediate process termination on the affected node. Due to MPI tight coupling, each affected job partition stalls or aborts entirely."
+      }
+    ],
+    "supporting_evidence": {
+      "relevant_logs": [
+        "LineId=166, KERNSTOR, 2005-06-13-17.36.43.927885, R10-M1-N5-C:J15-U11, KERNEL, FATAL, data storage interrupt",
+        "LineId=167, KERNSTOR, 2005-06-13-17.38.02.756042, R16-M0-NB-C:J07-U11, KERNEL, FATAL, data storage interrupt",
+        "LineId=186, KERNSTOR, 2005-06-14-09.06.45.752792, R15-M1-NF-C:J11-U11, KERNEL, FATAL, data storage interrupt",
+        "LineId=226, KERNSTOR, 2005-06-14-10.15.23.940275, R20-M0-ND-C:J15-U11, KERNEL, FATAL, data storage interrupt"
+      ],
+      "log_templates": [
+        "E52: data storage interrupt"
+      ],
+      "historical_similarity": "KERNSTOR is classified in the BGL/RAS Taxonomy as a Transient Hardware/Memory Exception (Error Type 2). However, 30 events on 30 distinct spatially-distributed nodes fits the pattern of an application code defect rather than hardware. System Impact per node is score 2 (single node process terminated); combined burst impact is higher.",
+      "system_context": "A DSI (Data Storage Interrupt) on PowerPC 440 occurs when a load or store instruction cannot be completed by the MMU — typically due to an invalid effective address, misaligned access on a non-supported type, or page protection violation. On BGL's lightweight kernel, there is no demand paging, so an access to an unmapped or protected memory region directly triggers a FATAL DSI rather than a page fault handled by the OS. Spatially distributed simultaneous events point to a coordinated cause (same application binary, same data pattern).",
+      "system_state_indicators": [
+        "30 events on 30 distinct nodes — no node appears twice",
+        "Nodes span over 14 different racks (R01 through R25)",
+        "Two distinct temporal bursts (8 events on 2005-06-13, 22 events on 2005-06-14)",
+        "All events are FATAL severity, KERNEL component",
+        "EventId E52 (data storage interrupt) exclusively"
+      ]
+    }
+  },
+  {
+    "rca_id": "BGL-RCA-004",
+    "dataset": "BGL",
+    "anomaly_type": "Simultaneous Multi-Node APPSEV - CioStream Link Severed Burst",
+    "root_cause_summary": "Multiple APPSEV (CioStream link severed) events firing simultaneously or within seconds across multiple I/O nodes targeting the same control service, indicating a shared network or service disruption affecting multiple active job partitions.",
+    "root_cause_description": "17 APPSEV events were recorded across the log sample, with notable clusters of simultaneous events. APPSEV corresponds to the ciod error 'Link has been severed' on the CioStream socket, which represents an abrupt TCP link termination during application load (after LOAD_MESSAGE but before execution). Unlike APPREAD (which occurs at job start), APPSEV occurs during the application loading phase. Multiple simultaneous APPSEV events on different I/O nodes targeting the same control IP (172.16.96.116) strongly indicate a shared upstream disruption — either the control service crashed, the network path to it was disrupted, or a TCP stack reset was propagated to all connected I/O nodes simultaneously. The burst at 2005-11-24 through 2005-12-14 shows a pattern of recurring APPSEV events across widely distributed I/O nodes (R14, R37, R44, R45, R54, R72, R74), each targeting the same control service, confirming the shared-service failure pattern.",
+    "confidence_level": "High",
+    "confidence_reasoning": "All APPSEV events target the same control service IP (172.16.96.116). The temporal clustering of events across geographically diverse I/O nodes (different racks) within seconds of each other is impossible to explain as independent hardware failures. This matches the documented APPSEV burst pattern in the BGL/RAS taxonomy (System Impact score 3, multi-partition simultaneous job failures) and the known shared-service failure classification.",
+    "causal_chain": [
+      {
+        "event": "First APPSEV cluster observed",
+        "timestamp": "2005-08-14-19.02.39",
+        "affected_component": "I/O node R21-M0-N8-I:J18-U11, ciod service 172.16.96.116",
+        "description": "First APPSEV event. ciod reports CioStream link severed during application load phase on socket to control service."
+      },
+      {
+        "event": "Recurring APPSEV events across widely dispersed I/O nodes",
+        "timestamp": "2005-09-11 through 2005-12-14",
+        "affected_component": "Multiple I/O nodes across racks R33, R37, R41, R43, R44, R45, R53, R54, R56, R71, R72, R74",
+        "description": "Pattern of APPSEV events continues across 3+ months on I/O nodes in racks R33 through R74, all targeting port 40000-60000 range on 172.16.96.116. Indicates the central control service or its network path has chronic instability."
+      },
+      {
+        "event": "Near-simultaneous APPSEV events",
+        "timestamp": "2005-12-13-09.52.35 and 09.53.18",
+        "affected_component": "I/O nodes R74-M1-N8-I and R44-M0-N4-I",
+        "description": "Two APPSEV events 43 seconds apart on nodes in racks R74 and R44 — different racks — both hitting the control service. Confirms shared upstream cause."
+      }
+    ],
+    "supporting_evidence": {
+      "relevant_logs": [
+        "LineId=1257, APPSEV, 2005-08-14-19.02.39.467287, R21-M0-N8-I:J18-U11, APP, FATAL, ciod: Error reading message prefix after LOAD_MESSAGE on CioStream socket to 172.16.96.116:42213: Link has been severed",
+        "LineId=1787, APPSEV, 2005-11-24-09.38.05.459006, R14-M0-N8-I:J18-U01, APP, FATAL, ciod: Error reading message prefix on CioStream socket to 172.16.96.116:41534, Link has been severed",
+        "LineId=1973, APPSEV, 2005-12-13-09.52.35.527182, R74-M1-N8-I:J18-U11, APP, FATAL, ciod: Error reading message prefix on CioStream socket to 172.16.96.116:55929, Link has been severed",
+        "LineId=1974, APPSEV, 2005-12-13-09.53.18.260783, R44-M0-N4-I:J18-U01, APP, FATAL, ciod: Error reading message prefix on CioStream socket to 172.16.96.116:56170, Link has been severed"
+      ],
+      "log_templates": [
+        "E29: ciod: Error reading message prefix after LOAD_MESSAGE on CioStream socket to <*>:<*>: Link has been severed",
+        "E32: ciod: Error reading message prefix on CioStream socket to <*>:<*>, Link has been severed"
+      ],
+      "historical_similarity": "APPSEV burst pattern documented in BGL/RAS taxonomy as multi-partition simultaneous job failures (System Impact score 3) with cross-system cascade potential (score 4 when 17 I/O nodes affected simultaneously). Matches Liang et al. finding that 50% of BGL network failures are followed by another within 30 minutes.",
+      "system_context": "The ciod CioStream control stream is the job control channel between I/O nodes and the central application management service. 'Link has been severed' (APPSEV) indicates an abrupt TCP RST or link-layer failure rather than a clean TCP close (APPRES) or timeout (APPTO). The shared service IP across all events confirms the failure originates at or near the control service endpoint, not at individual I/O nodes.",
+      "system_state_indicators": [
+        "All 17 APPSEV events target same control service IP 172.16.96.116",
+        "Events span racks R14 through R74 — geographically diverse across the machine",
+        "Near-simultaneous events (43-second gap) on nodes in different racks R74 and R44",
+        "Recurring pattern across 4+ months (August through December 2005)",
+        "FATAL severity on all events; all from APP component on I/O nodes"
+      ]
+    }
+  },
+  {
+    "rca_id": "BGL-RCA-005",
+    "dataset": "BGL",
+    "anomaly_type": "Lustre Filesystem Mount Failure - KERNMNTF",
+    "root_cause_summary": "Multiple I/O nodes across different racks failed to mount the Lustre parallel filesystem at mount point /p/gb1, indicating Lustre MGS (Management Server) unavailability or network path failure to the Lustre storage backend.",
+    "root_cause_description": "11 KERNMNTF events were recorded across I/O nodes in racks R01, R02, R04, R10, R24, R25, R30, R42, R55, spanning dates from 2005-08-31 through 2005-11-21. Each event records a Lustre mount failure on a different I/O node, all targeting mount point /p/gb1 served by bglio-series Lustre OSS (Object Storage Server) nodes. Two distinct failure modes are visible: (1) standard mount failure ('Lustre mount FAILED : bglio<N> : point /p/gb1') seen in early events, and (2) block_id/location variant ('Lustre mount FAILED : bglio<N> : block_id : location') in later events (2005-11-21 and 2005-12-04), suggesting a change in the failure mode — possibly indicating Lustre metadata or block mapping corruption. The Lustre MGS (Management Server) is a documented single point of failure: if it goes offline, all Lustre client mount operations fail across all I/O nodes. The distribution of affected bglio nodes (bglio23, bglio46, bglio75, bglio136, bglio336, bglio344, bglio388, bglio559, bglio617, bglio736) across a wide range of bglio IDs suggests the failure is at the MGS or shared Lustre network fabric, not at individual OSS nodes.",
+    "confidence_level": "High",
+    "confidence_reasoning": "All 11 KERNMNTF events target the same mount point /p/gb1, confirming a shared Lustre filesystem failure rather than independent I/O node problems. The distribution across many bglio OSS nodes (23 through 736) further confirms the failure is upstream of individual OSS nodes — pointing to the Lustre MGS as the single point of failure. This exactly matches the KERNMNTF pattern in the BGL/RAS taxonomy (Error Type 4 - Shared Infrastructure Failure).",
+    "causal_chain": [
+      {
+        "event": "First KERNMNTF event",
+        "timestamp": "2005-08-31-22.29.53",
+        "affected_component": "I/O node R42-M1-NC-I; Lustre OSS bglio559; Lustre MGS at /p/gb1",
+        "description": "First recorded Lustre mount failure. I/O node R42 cannot mount /p/gb1 via bglio559. Without Lustre mount, all compute node file I/O operations dependent on /p/gb1 will fail."
+      },
+      {
+        "event": "Recurring Lustre mount failures across multiple I/O nodes",
+        "timestamp": "2005-09-02 through 2005-09-13",
+        "affected_component": "I/O nodes in racks R02, R04, R10, R24, R25, R30, R55",
+        "description": "5 additional KERNMNTF events within two weeks across different I/O nodes and different bglio OSS endpoints, all for /p/gb1. Each failure affects up to 64 compute nodes that depend on that I/O node for filesystem access."
+      },
+      {
+        "event": "KERNMNTF failure mode changes to block_id/location variant",
+        "timestamp": "2005-11-21 and 2005-12-04",
+        "affected_component": "I/O nodes R04-M1-N8-I (bglio78) and R46-M0-N8-I (bglio617)",
+        "description": "New error variant: 'Lustre mount FAILED : bglio<N> : block_id : location' suggests Lustre metadata or block location lookup failure, possibly indicating namespace or block mapping corruption in the Lustre MDT/MGS."
+      }
+    ],
+    "supporting_evidence": {
+      "relevant_logs": [
+        "LineId=1377, KERNMNTF, 2005-08-31-22.29.53.058583, R42-M1-NC-I:J18-U11, KERNEL, FATAL, Lustre mount FAILED : bglio559 : point /p/gb1",
+        "LineId=1378, KERNMNTF, 2005-08-31-22.30.43.752965, R25-M1-N4-I:J18-U01, KERNEL, FATAL, Lustre mount FAILED : bglio344 : point /p/gb1",
+        "LineId=1390, KERNMNTF, 2005-09-04-15.01.11.038078, R24-M1-NC-I:J18-U01, KERNEL, FATAL, Lustre mount FAILED : bglio336 : point /p/gb1",
+        "LineId=1768, KERNMNTF, 2005-11-21-04.23.18.419757, R04-M1-N8-I:J18-U01, KERNEL, FATAL, Lustre mount FAILED : bglio78 : block_id : location",
+        "LineId=1947, KERNMNTF, 2005-12-04-12.05.37.993474, R46-M0-N8-I:J18-U11, KERNEL, FATAL, Lustre mount FAILED : bglio617 : block_id : location"
+      ],
+      "log_templates": [
+        "E81: Lustre mount FAILED : <*> : point <*>",
+        "E80: Lustre mount FAILED : <*> : block_id : location"
+      ],
+      "historical_similarity": "KERNMNTF is classified as Shared Infrastructure Failure (Error Type score 4) in the BGL/RAS taxonomy. Lustre MGS is documented as a single point of failure — if it goes offline, all client and server services are unavailable. Multiple I/O nodes across different racks failing to mount the same filesystem confirms shared infrastructure failure.",
+      "system_context": "BGL I/O nodes mount Lustre parallel filesystem at /p/gb1 to provide compute nodes with file I/O access. Lustre architecture has an MGS (Management Server) that all clients must contact for initial mount. The bglio nodes are Lustre OSS (Object Storage Servers) that handle data I/O; they are distinct from the MGS. Failure of all mounts regardless of which bglio OSS is specified points to the MGS as the single point of failure.",
+      "system_state_indicators": [
+        "All 11 KERNMNTF events target mount point /p/gb1",
+        "Affected bglio OSS nodes span IDs 23 through 736 — different storage servers",
+        "I/O nodes across racks R01 through R55 affected",
+        "Two distinct error subtypes observed (point vs block_id/location)",
+        "Events span 3 months (August through December 2005), suggesting chronic Lustre instability",
+        "Temporal cluster at 2005-08-31 22:29 and 22:30 (two events within 50 seconds) confirms shared upstream failure"
+      ]
+    }
+  }

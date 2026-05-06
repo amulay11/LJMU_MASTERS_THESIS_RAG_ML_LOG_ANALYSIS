@@ -1,0 +1,33 @@
+# ── Environment & tooling ────────────────────────────────────────────────────
+.venv/
+.claude/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.python-version
+*.egg-info/
+dist/
+build/
+.ipynb_checkpoints/
+
+# ── API keys — NEVER commit ──────────────────────────────────────────────────
+src/Keys/
+
+# ── Large dataset files (full logs — too large for GitHub) ───────────────────
+Datasets/BGL/Full Logs/
+Datasets/HDFS/Full_HDFS_v1/HDFS.log
+Datasets/HDFS/Full_HDFS_v1/preprocessed/
+
+# ── Qdrant vector store (built locally, not committed) ───────────────────────
+src/KnowledgeBase/qdrant_store/
+
+# ── Archive notebooks (superseded experiments) ───────────────────────────────
+src/ML Based/archive/
+src/LLM/E02_BGL_LLM_Baseline - Orig.ipynb
+
+# ── OS & editor artefacts ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
