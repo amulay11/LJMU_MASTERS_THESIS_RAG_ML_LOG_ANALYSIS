@@ -23,8 +23,12 @@ Datasets/HDFS/Full_HDFS_v1/preprocessed/
 src/KnowledgeBase/qdrant_store/
 
 # ── Archive notebooks (superseded experiments) ───────────────────────────────
+src/archive/
 src/ML Based/archive/
 src/LLM/E02_BGL_LLM_Baseline - Orig.ipynb
+
+# ── One-time generator scripts (not runtime dependencies) ────────────────────
+src/ML Based/create_if_pipeline.py
 
 # ── OS & editor artefacts ────────────────────────────────────────────────────
 .DS_Store
