@@ -151,6 +151,9 @@ All experiments operate on the **BGL dataset** using the same held-out test set 
 | E07 | Graph RAG | Builds a NetworkX knowledge graph over the KB corpus using component/level co-occurrence; 1-hop graph traversal expands the query with related templates before merging with dense retrieval results | [E07_BGL_DIRECT_GRAPH_RAG.ipynb](src/RAG/Graph%20RAG/E07_BGL_DIRECT_GRAPH_RAG.ipynb) |
 | E08 | Temporal RAG | Adds time as a retrieval dimension: dense candidates are reranked by a combined score (`0.7 × semantic + 0.3 × exp(−\|Δt\|/86400)`); retrieved logs are presented to the LLM chronologically to surface evolving error patterns | [E08_BGL_DIRECT_TEMPORAL_RAG.ipynb](src/RAG/Temporal%20RAG/E08_BGL_DIRECT_TEMPORAL_RAG.ipynb) |
 | E09 | DeepSVDD + Hybrid RAG | Combines Deep SVDD routing (Stage A/B/C) with BM25+Dense hybrid retrieval (RRF fusion, k=60); uncertain and anomalous logs are enriched with context retrieved from both sparse and dense indexes | [E09_DeepSVDD_Hybrid_RAG_Pipeline.ipynb](src/RAG/Hybrid%20RAG/E09_DeepSVDD_Hybrid_RAG_Pipeline.ipynb) |
+| E10 | DeepSVDD + Self-Reflective RAG | Combines Deep SVDD routing (Stage A/B/C) with iterative self-critique retrieval; Stage B/C logs trigger up to 2 reflection rounds where the model revises its initial response if confidence falls below 0.75 | [E10_DeepSVDD_Self_Ref_RAG_Pipeline.ipynb](src/RAG/Self%20Reflective%20RAG/E10_DeepSVDD_Self_Ref_RAG_Pipeline.ipynb) |
+| E11 | DeepSVDD + Graph RAG | Combines Deep SVDD routing (Stage A/B/C) with NetworkX graph-augmented retrieval; a component/level co-occurrence graph expands each query with 1-hop template neighbours before merging with dense retrieval results | [E11_BGL_DeepSVDD_GraphRAG_Pipeline.ipynb](src/RAG/Graph%20RAG/E11_BGL_DeepSVDD_GraphRAG_Pipeline.ipynb) |
+| E12 | DeepSVDD + Temporal RAG | Combines Deep SVDD routing (Stage A/B/C) with time-decay reranked retrieval; dense candidates are rescored by `0.7 × semantic + 0.3 × exp(−\|Δt\|/86400)` and presented chronologically to surface evolving failure patterns | [E12_BGL_DeepSVDD_TemporalRAG_Pipeline.ipynb](src/RAG/Temporal%20RAG/E12_BGL_DeepSVDD_TemporalRAG_Pipeline.ipynb) |
 
 ---
 
@@ -315,10 +318,10 @@ Experiments/
     ├── LLM/                     # E02 — few-shot CoT LLM baseline
     ├── RAG/
     │   ├── Vanilla RAG/         # E03 — RAG baseline; E04 — DeepSVDD-guided RAG
-    │   ├── Hybrid RAG/          # E05 — BM25 + Dense with RRF fusion
-    │   ├── Self Reflective RAG/ # E06 — iterative self-critique RAG
-    │   ├── Graph RAG/           # E07 — knowledge-graph-expanded retrieval
-    │   └── Temporal RAG/        # E08 — time-decay reranked retrieval
+    │   ├── Hybrid RAG/          # E05 — BM25 + Dense with RRF fusion; E09 — DeepSVDD + Hybrid RAG
+    │   ├── Self Reflective RAG/ # E06 — iterative self-critique RAG; E10 — DeepSVDD + Self-Reflective RAG
+    │   ├── Graph RAG/           # E07 — knowledge-graph-expanded retrieval; E11 — DeepSVDD + Graph RAG
+    │   └── Temporal RAG/        # E08 — time-decay reranked retrieval; E12 — DeepSVDD + Temporal RAG
     └── Prompts/
         ├── detection_prompts.py # Shared LLM and RAG prompt builders
         └── eval_prompts.py      # Shared LLM-as-judge evaluation prompts
