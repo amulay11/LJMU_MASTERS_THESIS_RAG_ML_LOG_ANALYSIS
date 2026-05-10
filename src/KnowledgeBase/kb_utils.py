@@ -98,13 +98,19 @@ class KBClient:
             try:
                 _QDRANT_SINGLETONS[key] = QdrantClient(path=key)
             except Exception as exc:
-                if "AlreadyLocked" in type(exc).__name__ or (
-                    "Permission" in str(exc) or "lock" in str(exc).lower()
+                _msg = str(exc).lower()
+                if (
+                    "AlreadyLocked" in type(exc).__name__
+                    or "Permission" in str(exc)
+                    or "lock" in _msg
+                    or "already accessed" in _msg
+                    or "concurrent access" in _msg
                 ):
                     raise RuntimeError(
-                        "Qdrant storage is locked by another kernel.\n"
-                        "Shut down all other notebook kernels that use KBClient "
-                        "(e.g. E03, E04) and re-run this cell."
+                        "Qdrant storage is locked by another kernel or a stale client.\n"
+                        "Fix: in the kernel that holds the lock call KBClient.close_all(), "
+                        "then re-run this cell.  If unsure which kernel, shut down all other "
+                        "notebook kernels (Kernel → Shut Down All Kernels) and retry."
                     ) from None
                 raise
         self._client = _QDRANT_SINGLETONS[key]

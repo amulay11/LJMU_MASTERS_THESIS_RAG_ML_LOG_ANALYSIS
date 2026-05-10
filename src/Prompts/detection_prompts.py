@@ -63,6 +63,7 @@ class DatasetConfig:
     log_format_description: str
     log_observation_hint: str
     anomaly_examples: List[Dict]
+    assessment_steps: str = ""   # overrides the default BGL Steps 1-4 when non-empty
     normal_cot_analysis: str = (
         "- Component and severity level are within expected operational range.\n"
         "- Content matches a routine informational or status message.\n"
@@ -236,9 +237,199 @@ BGL_CONFIG = DatasetConfig(
 
 
 # =============================================================================
+# BGL ASSESSMENT STEPS (default — used when config.assessment_steps is empty)
+# =============================================================================
+
+_BGL_ASSESSMENT_STEPS: str = (
+    "  Step 1 — Identify:  Read the [COMPONENT], [LEVEL], content, and Drain template.\n"
+    "  Step 2 — Interpret: What operation or event does the content describe?\n"
+    "  Step 3 — Assess severity:\n"
+    "             • INFO or WARNING with routine content → likely Normal.\n"
+    "             • ERROR or FATAL with failure content → likely Anomalous.\n"
+    "             • Fault keywords (error, failed, lost, killed, interrupt) at INFO level\n"
+    "               may still be Normal if the event was automatically corrected or is\n"
+    "               an expected self-healing operation (e.g. ECC correction, retry).\n"
+    "  Step 4 — Decide and output ONLY valid JSON:"
+)
+
+
+# =============================================================================
 # HDFS DATASET CONFIGURATION
 # =============================================================================
-# anomaly_examples left empty — populate when HDFS LLM/RAG experiments are built.
+# Anomalous examples: five fault types deliberately diverse — read exception,
+# write mirror failure, replication timeout, receive exception, orphan block —
+# so the model learns event-sequence reasoning rather than template matching.
+# Examples are distinct from typical HDFS test anomalies (pure IOException
+# sequences) to prevent template-anchoring.
+
+_HDFS_ANOMALOUS_EXAMPLES: List[Dict] = [
+    {
+        "log_text": (
+            "HDFS Block Trace | "
+            "Receiving block src: dest: -> "
+            "PacketResponder for block terminating -> "
+            "Got exception while serving to -> "
+            "PacketResponder Exception"
+        ),
+        "analysis": (
+            "- The trace starts with a block receive but never reaches a successful completion event.\n"
+            "- PacketResponder termination followed immediately by a serving exception signals a "
+            "mid-transfer read failure on the DataNode.\n"
+            "- No normal completion events (e.g. block received, replicated) appear in the sequence.\n"
+            "- This pattern indicates an abnormal block read path with an unrecovered I/O exception."
+        ),
+        "root_cause": (
+            "DataNode PacketResponder terminated abnormally during block transfer due to a read-side "
+            "I/O exception; risk: the block may be partially transferred or corrupted, "
+            "and the client read will fail or be retried from a replica."
+        ),
+        "sre_action": (
+            "Check DataNode logs on the serving node for the full IOException stack trace; "
+            "verify block replica integrity via `hdfs fsck` and trigger re-replication if needed."
+        ),
+        "devops_action": (
+            "Confirm disk health on the affected DataNode; if disk errors are found, "
+            "decommission the node and allow HDFS to re-replicate the under-replicated blocks."
+        ),
+        "confidence": 0.94,
+    },
+    {
+        "log_text": (
+            "HDFS Block Trace | "
+            "BLOCK* NameSystem allocateBlock: -> "
+            "Receiving block src: dest: -> "
+            "writeBlock received exception -> "
+            "Exception writing block to mirror -> "
+            "PacketResponder for block terminating"
+        ),
+        "analysis": (
+            "- Block allocation succeeded (NameSystem allocateBlock), but write-path exceptions appear.\n"
+            "- 'writeBlock received exception' and 'Exception writing block to mirror' indicate "
+            "the primary DataNode could not forward the block to its replication mirror.\n"
+            "- PacketResponder termination without a completion event confirms the write pipeline failed.\n"
+            "- The block is either not written or not replicated to the required factor."
+        ),
+        "root_cause": (
+            "Write pipeline failure: the primary DataNode received a block write exception and "
+            "could not forward data to the mirror DataNode; risk: the block may be under-replicated "
+            "or lost, and the client write will fail."
+        ),
+        "sre_action": (
+            "Inspect DataNode logs on both the primary and mirror nodes for network or disk errors; "
+            "run `hdfs fsck /` to identify under-replicated blocks and trigger re-replication."
+        ),
+        "devops_action": (
+            "Check inter-node network connectivity between the pipeline DataNodes; "
+            "if persistent, replace the failing DataNode and allow HDFS auto-replication to recover."
+        ),
+        "confidence": 0.96,
+    },
+    {
+        "log_text": (
+            "HDFS Block Trace | "
+            "BLOCK* NameSystem allocateBlock: -> "
+            "BLOCK* ask to replicate to -> "
+            "Failed to transfer to got -> "
+            "PendingReplicationMonitor timed out block"
+        ),
+        "analysis": (
+            "- NameSystem issued a replication request ('ask to replicate to') but it failed.\n"
+            "- 'Failed to transfer to got' confirms the DataNode could not deliver the replica.\n"
+            "- PendingReplicationMonitor timeout means HDFS waited the full retry window with no success.\n"
+            "- The block remains under-replicated beyond the replication threshold."
+        ),
+        "root_cause": (
+            "Replication pipeline timeout: HDFS could not replicate a block to the target DataNode "
+            "within the allowed window, leaving the block under-replicated; "
+            "risk: if the source replica fails before re-replication, the block may be permanently lost."
+        ),
+        "sre_action": (
+            "Check the target DataNode's network reachability and disk capacity; "
+            "verify replication queue depth via the NameNode web UI and identify stalled replications."
+        ),
+        "devops_action": (
+            "Investigate disk space and network bandwidth on the target DataNode; "
+            "if the node is unhealthy, decommission it so HDFS selects a healthy target automatically."
+        ),
+        "confidence": 0.92,
+    },
+    {
+        "log_text": (
+            "HDFS Block Trace | "
+            "BLOCK* NameSystem allocateBlock: -> "
+            "Receiving block src: dest: -> "
+            "Exception in receiveBlock for block -> "
+            "PacketResponder for block terminating"
+        ),
+        "analysis": (
+            "- Block allocation was issued but 'Exception in receiveBlock' shows the receive call threw.\n"
+            "- PacketResponder termination without a completion event confirms the receive failed.\n"
+            "- No retry or mirror exception pattern — this is a clean receive-side failure.\n"
+            "- The block is not stored on the destination DataNode."
+        ),
+        "root_cause": (
+            "receiveBlock call threw an exception on the destination DataNode, preventing block storage; "
+            "risk: the allocated block slot is unused and the client write will fail or fall back to "
+            "an alternate DataNode."
+        ),
+        "sre_action": (
+            "Review the destination DataNode logs for the exception type (disk full, I/O error, OOM); "
+            "verify DataNode health and disk capacity before allowing further writes."
+        ),
+        "devops_action": (
+            "If disk capacity is the cause, expand storage or decommission the node; "
+            "run `hdfs fsck` to confirm no blocks are permanently under-replicated."
+        ),
+        "confidence": 0.93,
+    },
+    {
+        "log_text": (
+            "HDFS Block Trace | "
+            "BLOCK* NameSystem allocateBlock: -> "
+            "Receiving block src: dest: -> "
+            "Received block of size from -> "
+            "BLOCK* NameSystem addStoredBlock: addStoredBlock request received for "
+            "on size But it does not belong to any file"
+        ),
+        "analysis": (
+            "- Block was received and stored, but NameSystem cannot associate it with any file metadata.\n"
+            "- 'addStoredBlock: ... does not belong to any file' is the orphan-block indicator.\n"
+            "- This is a metadata consistency anomaly: the DataNode holds data the NameNode does not track.\n"
+            "- Orphan blocks waste storage and signal a metadata synchronisation failure."
+        ),
+        "root_cause": (
+            "Orphan block: a DataNode received and stored a block that the NameNode has no file "
+            "metadata for, indicating a metadata–data consistency gap; risk: storage waste and "
+            "potential data loss if the associated file was deleted mid-write."
+        ),
+        "sre_action": (
+            "Run `hdfs fsck / -list-corruptfileblocks` and check NameNode audit logs for the "
+            "block ID to determine whether the parent file was deleted or the write was interrupted."
+        ),
+        "devops_action": (
+            "Schedule a periodic `hdfs balancer` and `fsck` run to detect and remove orphan blocks; "
+            "investigate whether the write workflow retries correctly on client failure."
+        ),
+        "confidence": 0.88,
+    },
+]
+
+_HDFS_ASSESSMENT_STEPS: str = (
+    "  Step 1 — Identify:  List each event in the block trace sequence (e.g. allocateBlock, "
+    "Receiving block, PacketResponder, addStoredBlock).\n"
+    "  Step 2 — Interpret: Map each event to its operation — allocate, receive, write, "
+    "replicate, serve, complete, or error.\n"
+    "  Step 3 — Assess the trace:\n"
+    "             • Normal lifecycle (allocate → receive → complete/replicate) with no "
+    "exception events → likely Normal.\n"
+    "             • Exception events (Exception, Failed, timed out, Error) anywhere in "
+    "the sequence → likely Anomalous.\n"
+    "             • PacketResponder termination without a preceding completion event → "
+    "likely Anomalous.\n"
+    "             • Orphan-block indicator ('does not belong to any file') → Anomalous.\n"
+    "             • Redundant addStoredBlock alone in an otherwise normal trace may be Normal.\n"
+    "  Step 4 — Decide and output ONLY valid JSON:"
+)
 
 HDFS_CONFIG = DatasetConfig(
     name="HDFS",
@@ -248,13 +439,15 @@ HDFS_CONFIG = DatasetConfig(
         "block replication events, and Hadoop cluster fault recovery"
     ),
     log_format_description=(
-        "HDFS Block Trace | <event_sequence>  "
-        "(each token is a Drain event-template ID, e.g. E5 -> E22 -> E11)"
+        "HDFS Block Trace | <event_1> -> <event_2> -> ...  "
+        "(each token is a cleaned Drain event-template description)"
     ),
     log_observation_hint=(
-        "the event sequence, trace length, and presence of error or failure event IDs"
+        "the event sequence, the presence of exception or failure events, "
+        "and whether the trace reaches a normal completion"
     ),
-    anomaly_examples=[],   # to be populated when HDFS experiments are added
+    anomaly_examples=_HDFS_ANOMALOUS_EXAMPLES,
+    assessment_steps=_HDFS_ASSESSMENT_STEPS,
     normal_cot_analysis=(
         "- The block event sequence follows a normal read/write/replication pattern.\n"
         "- No error or failure event IDs are present in the trace.\n"
@@ -371,6 +564,7 @@ def build_llm_system_prompt(
         format_anomalous_example(ex, i + 1)
         for i, ex in enumerate(config.anomaly_examples)
     )
+    assessment_steps = config.assessment_steps or _BGL_ASSESSMENT_STEPS
     return (
         "You are a senior Site Reliability Engineer (SRE) specialising in "
         f"{config.domain} log analysis. "
@@ -379,15 +573,7 @@ def build_llm_system_prompt(
         "Each log entry is formatted as:\n"
         f"  {config.log_format_description}\n\n"
         "For each log entry, reason step-by-step before deciding:\n\n"
-        f"  Step 1 — Identify:  Read the [COMPONENT], [LEVEL], content, and Drain template.\n"
-        "  Step 2 — Interpret: What operation or event does the content describe?\n"
-        "  Step 3 — Assess severity:\n"
-        "             • INFO or WARNING with routine content → likely Normal.\n"
-        "             • ERROR or FATAL with failure content → likely Anomalous.\n"
-        "             • Fault keywords (error, failed, lost, killed, interrupt) at INFO level\n"
-        "               may still be Normal if the event was automatically corrected or is\n"
-        "               an expected self-healing operation (e.g. ECC correction, retry).\n"
-        "  Step 4 — Decide and output ONLY valid JSON:\n\n"
+        + assessment_steps + "\n\n"
         "     Normal   → {\"label\": \"Normal\", \"confidence\": <float 0.0-1.0>}\n\n"
         "     Anomalous→ {\"label\": \"Anomalous\", \"confidence\": <float 0.0-1.0>,\n"
         "                 \"root_cause\":    \"<failure hypothesis + risk/system impact>\",\n"
